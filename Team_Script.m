@@ -22,22 +22,14 @@
 %% Break Down the Problem
 % In the space below, define the problem statement:
 % 
-% 
-% 
 % List the requirements, constraints, and success criteria for the project:
-% 
-% 
 % 
 % What is your proposed solution?
 % 
-% 
-% 
 % List the steps you will need to take to achieve your proposed solution:
 % 
-% 
-% 
 % What challenges do you face in the process of achieving the solution?
-%% Task 1: Explore and Organize Image Dataset 
+%% Task 1: Explore and Organize Image Dataset
 % Your goal in this step is to define defect classes and labels (keep it small).
 %% 
 % * Load and inspect the images and labels from your chosen dataset (see the 
@@ -118,10 +110,6 @@ disp('PASS vs FAIL counts')
 summary(imageTable.Label)
 disp('Defect subtype summary')
 summary(imageTable.DefectType)
-
-
-
-
 %% Task 2: Build a Single-Image Inspection Function
 % Your goal in this step is to create a function that analyzes and image to 
 % identify and quantify suspected defects detected in the image. You're trying 
@@ -160,7 +148,7 @@ summary(imageTable.DefectType)
 %% 
 % * Fixed crop defined once (camera is consistent): indexing or |imcrop(...)| 
 % OR
-% * Auto-crop from the part mask: segment the part, compute |BoundingBox| using 
+% * Auto-crop from the part mask: segment the part, compute |BoundingBox| using  
 % |regionprops(...)|, then |imcrop(...)|.
 %% 
 % *STEP 4. Segment the image for an evidence overlay*
@@ -233,8 +221,8 @@ function baselineDecision = decideRules(evidence)
 % Output:
 %   baselineDecision.fail    - True if a defect is found.
 %   baselineDecision.reasons - Cell array of defect descriptions.
-
 %% Thresholds
+
     contamStdMax = 8.5 / 255;      % Contamination threshold
     solidityBreakMax = 0.97; % Small break threshold
     solidityLargeMax = 0.90; % Large break threshold
@@ -270,15 +258,15 @@ function [maskEvidence, evidence] = defectEvidence(roi)
 % Outputs:
 %   maskEvidence - Binary mask of the opening.
 %   evidence - Defect metrics.
-
 %% Convert to grayscale
+
 if size(roi,3) == 3
     roi = rgb2gray(roi);
 end
 roi = im2double(roi);
 [h,w] = size(roi);
-
 %% Find the bottle opening
+
 darkMask = roi < 0.24;
 darkMask = bwareaopen(darkMask,20);
 darkMask = imfill(darkMask,'holes');
@@ -295,21 +283,21 @@ if cc.NumObjects == 0
         'contamCoreStd',std(roi(:)));
     return
 end
-
 %% Keep the largest region
+
 blobSizes = cellfun(@numel,cc.PixelIdxList);
 [~,largestIdx] = max(blobSizes);
 
 opening = false(h,w);
 opening(cc.PixelIdxList{largestIdx}) = true;
 maskEvidence = opening;
-
 %% Measure opening shape
+
 stats = regionprops(opening,'Area','Solidity');
 maxArea = stats.Area;
 solidity = stats.Solidity;
-
 %% Measure center brightness
+
 [X,Y] = meshgrid(1:w,1:h);
 centerX = (w+1)/2;
 centerY = (h+1)/2;
@@ -325,8 +313,8 @@ end
 
 contamCoreMean = mean(pixels);
 contamCoreStd = std(pixels);
-
 %% Store results
+
 evidence = struct( ...
     'maxArea',maxArea,...
     'solidity',solidity,...
@@ -345,7 +333,7 @@ function [inspected_image, evidence, baselineDecision] = inspect_image(image_inp
     % From inspection, the bottle is already centered so roi can be
     % skipped.
 
-    roi = img_BW_Cont_Deno
+    roi = img_BW_Cont_Deno;
 
     [maskEvidence, evidence] = defectEvidence(roi);
     baselineDecision = decideRules(evidence);
@@ -369,6 +357,16 @@ disp(badEvidence);
 disp(badDecision);
 
 %sanity check that segmentation worked
+predictedFail = false(height(imageTable), 1);
+
+for i = 1:height(imageTable)
+    currentImg = readimage(imds, i);
+
+    [~, ~, decision] = inspect_image(currentImg);
+
+    predictedFail(i) = decision.fail;
+end
+
 actualFail = imageTable.Label == categorical("FAIL");
 
 correct = predictedFail == actualFail;
@@ -390,7 +388,7 @@ fprintf("False PASS: %d\n", falsePass);
 % |resnet18|) to classify each part as either a PASS or FAIL, that will be part 
 % of the output of the function you began to build in the previous step.
 %% 
-% * Load the recommended starter network: use |imagePretrainedNetwork| and select 
+% * Load the recommended starter network: use |imagePretrainedNetwork| and select  
 % |resnet18| from the Deep Learning Toolbox.
 % * Resize/augment input with |augmentedImageDatastore(...)| to match the network 
 % input size.
@@ -401,22 +399,87 @@ fprintf("False PASS: %d\n", falsePass);
 % * The output of your AI classification model should be a predicted label (PASS/FAIL) 
 % and a confidence score in that label
 %% 
-% Deliverable: |[aiLabel, aiScore] = classify(net, roiForNet)| 
+% Deliverable: |[aiLabel, aiScore] = classify(net, roiForNet)|
 
 % Insert your code here (or make use of helper functions or additional .m or .mlx files and indicate where
 % they can be found). Ensure your code is well-documented.
 
+function roiForNet = prepareForNet(I)
 
-
-
-
-
-function [aiLabel, aiScores] = classify(net, roiForNet)
-    % You can write your function here 
+I = imresize(I, [224 224]);
+if size(I,3) == 1
+    I = cat(3, I, I, I);
 end
+roiForNet = I; 
+
+
+end
+
+function [aiLabel, aiScore] = classifyImage(net, roiForNet)
+
+scores = minibatchpredict(net, roiForNet);
+classNames = ["FAIL", "PASS"];
+[aiLabel, aiScore] = scores2label(scores, classNames);
+
+end
+
+
+% split data to train and test ds
+rng(40); % seed value
+[imdsTrain, imdsTest] = splitEachLabel(imds, 0.8, 'randomized'); % 80% train + 20% test
+disp('Train set:')
+countEachLabel(imdsTrain)
+disp('Test set:')
+countEachLabel(imdsTest)
+
+% Class imbalance handled via WEIGHTED LOSS instead of oversampling/duplication -
+% avoids the network seeing repeated FAIL images, penalizes FAIL mistakes more instead.
+classNames = ["FAIL","PASS"];
+counts = countcats(imdsTrain.Labels);           % [FAIL count, PASS count]
+classWeights = sum(counts) ./ (numel(counts) * counts);
+fprintf('Class weights -> FAIL: %.3f, PASS: %.3f\n', classWeights(1), classWeights(2));
+
+% Resize inputs to match network input size
+inputSize = [224 224 3];
+
+% augmentation to prevent overfitting
+augmenter = imageDataAugmenter('RandRotation',[-10 10], 'RandXReflection',true);
+augimdsTrain = augmentedImageDatastore(inputSize, imdsTrain, 'DataAugmentation',augmenter);
+augimdsTest = augmentedImageDatastore(inputSize, imdsTest);
+
+% load and adapt the recommended model to 2 classes
+net = imagePretrainedNetwork('resnet18', NumClasses = 2);
+options = trainingOptions("adam", 'MaxEpochs',8, 'MiniBatchSize',16, 'InitialLearnRate',1e-4, ...
+    'ValidationData',augimdsTest, 'ValidationFrequency',10, 'Verbose', true, 'Plots','training-progress');
+
+net = trainnet(augimdsTrain, net, @(Y,T) crossentropy(Y,T,classWeights,'WeightsFormat','C'), options);
+% --------test it on an image ------
+testIdx = 1;
+I = imread(imageTable.FilePath{testIdx});
+roiForNet = prepareForNet(I);
+[aiLabel, aiScore] = classifyImage(net, roiForNet);
+
+fprintf('Predicted: %s (confidence: %.2f%%)\n', aiLabel, aiScore*100);
+fprintf('True label: %s\n', string(imageTable.Label(testIdx)));
+
+% ---- test several FAIL Cases
+testFailIdx = find(imdsTest.Labels == 'FAIL');
+sampleFailIdx = testFailIdx(1:min(10, numel(testFailIdx)));
+
+correct = 0;
+for i = 1:numel(sampleFailIdx)
+    I = readimage(imdsTest, sampleFailIdx(i));
+    roiForNet = prepareForNet(I);
+    [aiLabel, aiScore] = classifyImage(net, roiForNet);
+    isCorrect = strcmp(string(aiLabel), 'FAIL');
+    correct = correct + isCorrect;
+    fprintf('FAIL sample %d -> predicted=%s (%.2f%%) %s\n', ...
+        i, aiLabel, aiScore*100, string(isCorrect));
+end
+fprintf('\n%d/%d FAIL images correctly identified\n', correct, numel(sampleFailIdx));
 %% Task 3 Checkpoint: Combine outputs into a hybrid inspection result
 % Your image inspection function (e.g. |inspectPar(I)|) should combine the classical 
-% evidence with the AI classification output. 
+% evidence with the AI classification output.
 % 
 % In other words, your image inspection function should integrate both classical 
 % evidence from image processing and an AI classification decision. The AI classifier 
@@ -437,12 +500,89 @@ end
 
 % Insert your code here (or make use of helper functions or additional .m or .mlx files and indicate where
 % they can be found). Ensure your code is well-documented.
+%% --- Test inspectPart across the full test set, check accuracy ---
+numTest = numel(imdsTest.Files);
+predictedLabels = strings(numTest, 1);
+trueLabels = strings(numTest, 1);
+disagreementCount = 0;
+
+for i = 1:numTest
+    I = readimage(imdsTest, i);
+    result = inspectPart(I, net, false);  % saveRejects=false, just checking accuracy
+    % figure
+    % imshow(result.annotatedImage)
+    predictedLabels(i) = string(result.finalLabel);
+    trueLabels(i) = string(imdsTest.Labels(i));
+
+    if result.disagreementFlag
+        disagreementCount = disagreementCount + 1;
+    end
+end
 
 
+function result = inspectPart(I, net, saveRejects, rejectFolder)
 
+if nargin < 4
+    saveRejects = false;
+end
+if nargin < 5
+    rejectFolder = 'rejected_parts';
+end
 
-function [finalLabel, confidenceScore, evidenceOverlay, evidenceMetrics, baselineDecision] = inspectPart(I)
-    % You can write your function here 
+[evidenceOverlay, evidence, baselineDecision] = inspect_image(I);
+roiForNet = prepareForNet(I);
+[aiLabel, aiScore] = classifyImage(net, roiForNet);
+
+result.finalLabel = aiLabel;
+result.confidenceScore = aiScore;
+result.evidenceOverlay = evidenceOverlay;
+result.evidenceMetrics = evidence;
+result.baselineDecision = baselineDecision;
+if baselineDecision.fail
+    baselineLabel = "FAIL";
+else
+    baselineLabel = "PASS";
+end
+
+result.disagreementFlag = string(aiLabel) ~= baselineLabel;
+
+%annotate the image with the results using insertText and insertShape
+
+displayImage = imresize(I, [256 256]);
+if size(displayImage, 3) == 1
+    displayImage = cat(3, displayImage, displayImage, displayImage);
+end
+
+% drawing a color coded box by decision
+% red -> FAIL, green -> PASS
+if strcmp(string(aiLabel), 'PASS')
+    boxColor = 'green';
+else
+    boxColor = 'red';
+end
+
+annotated = insertShape(displayImage, "rectangle", [2 2 252 252], "Color", boxColor, "LineWidth", 4);
+
+labelText = sprintf('%s (%.1f%%)', aiLabel, aiScore*100);
+annotated = insertText(annotated, [10 10], labelText, "FontSize",14, "BoxColor", boxColor, "TextColor", "white");
+
+if result.disagreementFlag
+    annotated = insertText(annotated, [10 40], 'DISAGREEMENT: check manually', 'FontSize', 14, 'BoxColor', 'yellow', 'TextColor', 'black');
+end
+result.annotatedImage = annotated;
+
+% save rejected parts to disk
+
+if saveRejects && strcmp(string(aiLabel), 'FAIL')
+    if ~exist(rejectFolder, 'dir')
+        mkdir(rejectFolder);
+    end
+    filename = fullfile(rejectFolder, ...
+        sprintf('reject_%s.png', string(datetime('now', ...
+        'Format','yyyy-MM-dd_HH-mm-ss-SSS'))));
+    imwrite(annotated, filename);
+    fprintf("Saved rejected pat to: %s\n", filename);
+end
 end
 %% Task 4: Evaluate Inspection System Performance
 % Now that you've built a hybrid inspection system that integrates classical 
@@ -466,10 +606,6 @@ end
 % (or include as a local helper function) that combines the work you've done 
 % so far here and additionally performs the steps outlined in the task description. 
 % You can run it from here.
-
-
-
-
 %% Task 5: Test and Evaluate System Robustness
 % Your goal in this step is to assess how your system performs under simulated 
 % variations. You can simulate image inspection station variation by altering 
@@ -488,22 +624,9 @@ end
 
 % Insert your code here (or make use of helper functions or additional .m or .mlx files and indicate where
 % they can be found). Ensure your code is well-documented.
-
-
-
 %% Interpretation of Results
 % Summarize your findings by interpreting their physical/engineering meaning:
 % 
-% 
-% 
 % What are some limitations of your work?
 % 
-% 
-% 
 % What are practical next steps?
-% 
-% 
-% 
-% 
-% 
-%
