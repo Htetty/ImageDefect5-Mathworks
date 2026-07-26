@@ -181,7 +181,7 @@ summary(imageTable.DefectType)
 % 
 % Your goal is to quantify the evidence for suspected defects, which supports 
 % traceability and debugging in your workflow. These metrics should answer the 
-% question: “What did the algorithm see, and how strong was the evidence?”
+% question: "What did the algorithm see, and how strong was the evidence?"
 % 
 % These measurements are mainly for traceability (inspection logs), debugging, 
 % and sanity checks. Keep it to 3–4 metrics so it stays easy.
@@ -194,7 +194,7 @@ summary(imageTable.DefectType)
 % * |areaRatio|: fraction of the ROI flagged as suspicious (|nnz(maskEvidence) 
 % / numel(maskEvidence)|)
 % * _(optional)_ |edgeDensity|: if your evidence comes from edges (chips/scratches), 
-% measure how “edgy” the ROI is (|nnz(edgeMask) / numel(edgeMask)|)
+% measure how "edgy" the ROI is (|nnz(edgeMask) / numel(edgeMask)|)
 %% 
 % *STEP 6. _Optionally_, implement a rule-based baseline.*
 % 
@@ -224,40 +224,167 @@ badImg = readimage(imds, badIdx);
 
 montage({goodImg, badImg})
 
-function inspected_image = inspect_image(image_input)
+function baselineDecision = decideRules(evidence)
+% decideRules Apply rule-based defect detection.
+%
+% Input:
+%   evidence - Struct from defectEvidence.
+%
+% Output:
+%   baselineDecision.fail    - True if a defect is found.
+%   baselineDecision.reasons - Cell array of defect descriptions.
+
+%% Thresholds
+    contamStdMax = 8.5 / 255;      % Contamination threshold
+    solidityBreakMax = 0.97; % Small break threshold
+    solidityLargeMax = 0.90; % Large break threshold
+    
+    reasons = {};
+
+% Detect irregular or broken bottle openings
+    if evidence.solidity < solidityBreakMax
+
+        if evidence.solidity < solidityLargeMax
+            reasons{end+1} = sprintf( ...
+                'Large irregularity: solidity %.3f below limit %.3f', ...
+                evidence.solidity, solidityLargeMax);
+        else
+            reasons{end+1} = sprintf( ...
+                'Small irregularity: solidity %.3f below limit %.3f', ...
+                evidence.solidity, solidityBreakMax);
+        end
+
+    end
+
+    baselineDecision.fail = ~isempty(reasons);
+    baselineDecision.reasons = reasons;
+
+end
+
+function [maskEvidence, evidence] = defectEvidence(roi)
+% defectEvidence Detect bottle-opening defects.
+%
+% Inputs:
+%   roi - Grayscale or RGB bottle-opening image.
+%
+% Outputs:
+%   maskEvidence - Binary mask of the opening.
+%   evidence - Defect metrics.
+
+%% Convert to grayscale
+if size(roi,3) == 3
+    roi = rgb2gray(roi);
+end
+roi = im2double(roi);
+[h,w] = size(roi);
+
+%% Find the bottle opening
+darkMask = roi < 0.24;
+darkMask = bwareaopen(darkMask,20);
+darkMask = imfill(darkMask,'holes');
+
+cc = bwconncomp(darkMask);
+
+% Return default values if no opening is found
+if cc.NumObjects == 0
+    maskEvidence = false(h,w);
+    evidence = struct( ...
+        'maxArea',0,...
+        'solidity',0,...
+        'contamCoreMean',mean(roi(:)),...
+        'contamCoreStd',std(roi(:)));
+    return
+end
+
+%% Keep the largest region
+blobSizes = cellfun(@numel,cc.PixelIdxList);
+[~,largestIdx] = max(blobSizes);
+
+opening = false(h,w);
+opening(cc.PixelIdxList{largestIdx}) = true;
+maskEvidence = opening;
+
+%% Measure opening shape
+stats = regionprops(opening,'Area','Solidity');
+maxArea = stats.Area;
+solidity = stats.Solidity;
+
+%% Measure center brightness
+[X,Y] = meshgrid(1:w,1:h);
+centerX = (w+1)/2;
+centerY = (h+1)/2;
+radius = 0.22*min(h,w);
+
+coreZone = (X-centerX).^2 + (Y-centerY).^2 <= radius^2;
+coreZone = coreZone & opening;
+
+pixels = roi(coreZone);
+if isempty(pixels)
+    pixels = roi(:);
+end
+
+contamCoreMean = mean(pixels);
+contamCoreStd = std(pixels);
+
+%% Store results
+evidence = struct( ...
+    'maxArea',maxArea,...
+    'solidity',solidity,...
+    'contamCoreMean',contamCoreMean,...
+    'contamCoreStd',contamCoreStd);
+
+end
+
+function [inspected_image, evidence, baselineDecision] = inspect_image(image_input)
 
     % Step 2: Preprocess 
     img_BW = im2gray(image_input); % Turn image to black and white 
     img_BW_Cont = adapthisteq(img_BW, "ClipLimit", 0.01); % Contrast normalization
     img_BW_Cont_Deno = imgaussfilt(img_BW_Cont); % Denoising
-    inspected_image = img_BW_Cont_Deno
 
     % From inspection, the bottle is already centered so roi can be
     % skipped.
 
     roi = img_BW_Cont_Deno
 
-    % Step 4: Segment Image
-    
-    % detect dark regions
-    maskEvidence = ~imbinarize(roi, "adaptive", "ForegroundPolarity", "dark");
-
-    % removes small specks
-    maskEvidence = bwareaopen(maskEvidence, 25);
-
-    % if there's small gaps, connects them
-    maskEvidence = imclose(maskEvidence, strel("disk", 2));
+    [maskEvidence, evidence] = defectEvidence(roi);
+    baselineDecision = decideRules(evidence);
 
     % highlight irregularities as red 
     inspected_image = labeloverlay(image_input, maskEvidence, "Colormap", [1 0 0], "Transparency", 0.55);
 
+
 end
 
-goodInspect = inspect_image(goodImg);
-badInspect = inspect_image(badImg);
+
+[goodInspect, goodEvidence, goodDecision] = inspect_image(goodImg);
+[badInspect, badEvidence, badDecision] = inspect_image(badImg);
 
 montage({goodInspect, badInspect});
 
+disp(goodEvidence);
+disp(goodDecision);
+
+disp(badEvidence);
+disp(badDecision);
+
+%sanity check that segmentation worked
+actualFail = imageTable.Label == categorical("FAIL");
+
+correct = predictedFail == actualFail;
+
+fprintf("Correct predictions: %d / %d\n", sum(correct), numel(correct));
+fprintf("Accuracy: %.2f%%\n", 100 * mean(correct));
+
+truePass  = sum(~actualFail & ~predictedFail);
+trueFail  = sum( actualFail &  predictedFail);
+falseFail = sum(~actualFail &  predictedFail);
+falsePass = sum( actualFail & ~predictedFail);
+
+fprintf("True PASS:  %d\n", truePass);
+fprintf("True FAIL:  %d\n", trueFail);
+fprintf("False FAIL: %d\n", falseFail);
+fprintf("False PASS: %d\n", falsePass);
 %% Task 3: Train and Integrate an AI Classifier into your Single-Image Inspection Function
 % Your goal in this step is to use a MathWorks provided pretrained network (recommended: 
 % |resnet18|) to classify each part as either a PASS or FAIL, that will be part 
@@ -302,7 +429,7 @@ end
 % * |confidenceScore| (from AI, in Task 3)
 % * |evidenceOverlay| (from Step 4 in Task 2)
 % * |evidenceMetrics| (from Step 5 in Task 2)
-% * (optional) |baselineDecision| and a “disagreement flag” if optional rules 
+% * (optional) |baselineDecision| and a "disagreement flag" if optional rules 
 % in Step 6 from Task 2 and AI output disagree
 %% 
 % Optionally, you can also choose to overlay these results on the image using 
@@ -374,3 +501,9 @@ end
 % 
 % 
 % What are practical next steps?
+% 
+% 
+% 
+% 
+% 
+%
