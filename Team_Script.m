@@ -687,6 +687,89 @@ end
 
 % Insert your code here (or make use of helper functions or additional .m or .mlx files and indicate where
 % they can be found). Ensure your code is well-documented.
+% Insert your code here (or make use of helper functions or additional .m or .mlx files and indicate where
+% they can be found). Ensure your code is well-documented.
+
+numTest = numel(imdsTest.Files);
+conditions = {'Baseline', 'Brightness', 'Blur', 'Noise'}
+robustnessResults = table();
+for c = 1:numel(conditions)
+    condition = conditions{c}
+    predictedLabels = strings(numTest, 1);
+    trueLabels = strings(numTest,1);
+
+    for i = 1:numTest
+        I = readimage(imdsTest,i);
+
+        % apply the suggested distortions
+        switch condition
+            case 'Baseline'
+                Idist = I; %no distortion
+            case 'Brightness'
+                % Pixels with intensities below 0.3 become black, those above 0.7 become
+                % white, and values in between are stretched to simulate illumination changes.
+                % [] maps output to range between 0 and 1
+                Idist = imadjust(I, [], [], 0.7);
+            case 'Blur'
+                % The larger the sigma value, the blurrier the image becomes.
+                Idist = imgaussfilt(I, 3);
+            case 'Noise'
+                %% Add Gaussian noise with mean = 0 and variance = 0.01 (higher variance adds more noise, lower variance adds less) to simulate realistic sensor noise.
+                Idist = imnoise(I, 'gaussian', 0, 0.01);
+        end
+
+        result = inspectPart(Idist, net, false);
+        predictedLabels(i) = string(result.finalLabel);
+        trueLabels(i) = string(imdsTest.Labels(i));
+    end
+
+
+    correct = sum(predictedLabels == trueLabels);
+    accuracy = correct / numTest * 100;
+
+    passIdx = trueLabels == 'PASS';
+    failIdx = trueLabels == 'FAIL';
+    passAccuracy = sum(predictedLabels(passIdx) == trueLabels(passIdx)) / sum(passIdx) * 100;
+    failAccuracy = sum(predictedLabels(failIdx) == trueLabels(failIdx)) / sum(failIdx) * 100;
+
+    falseRejects = sum(trueLabels == 'PASS' & predictedLabels == 'FAIL');
+    falseAccepts = sum(trueLabels == 'FAIL' & predictedLabels == 'PASS');
+    falseRejectRate = falseRejects / sum(passIdx) * 100;
+    falseAcceptRate = falseAccepts / sum(failIdx) * 100;
+    robustnessResults = [robustnessResults; table(string(condition), accuracy, passAccuracy, failAccuracy, ...
+        falseRejects, falseRejectRate, falseAccepts, falseAcceptRate, ...
+        'VariableNames', {'Condition','Accuracy_pct','PassAccuracy_pct','FailAccuracy_pct', ...
+        'FalseRejects','FalseRejectRate_pct','FalseAccepts','FalseAcceptRate_pct'})];
+end
+
+disp('=== Robustness Summary Across Conditions ===')
+disp(robustnessResults)
+
+%% --- Visualize how accuracy and false-reject rate change across conditions ---
+conditionOrder = categorical(robustnessResults.Condition, conditions);
+
+figure
+subplot(2,1,1)
+bar(conditionOrder, robustnessResults.Accuracy_pct)
+ylabel('Accuracy (%)')
+title('Overall Accuracy Across Simulated Conditions')
+grid on
+
+subplot(2,1,2)
+bar(conditionOrder, robustnessResults.FalseRejectRate_pct)
+ylabel('False Reject Rate (%)')
+title('False Reject Rate Across Simulated Conditions')
+grid on
+
+%% --- Optional: visualize an example of each distortion for the report ---
+sampleI = readimage(imdsTest, 1);
+figure
+subplot(1,4,1), imshow(sampleI), title('Baseline')
+subplot(1,4,2), imshow(imadjust(sampleI, [0.3 0.7], [])), title('Brightness')
+subplot(1,4,3), imshow(imgaussfilt(sampleI, 3)), title('Blur')
+subplot(1,4,4), imshow(imnoise(sampleI, 'gaussian', 0, 0.01)), title('Noise')
+sgtitle('Example Distortions Applied for Robustness Testing')
+
 %% Interpretation of Results
 % Summarize your findings by interpreting their physical/engineering meaning:
 % 
