@@ -17,18 +17,76 @@
 % # Train and Integrate an AI Classifier into your Single-Image Inspection Function
 % # Evaluate Inspection System Performance
 % # Test and Evaluate System Robustness
-%% 
-% 
 %% Break Down the Problem
 % In the space below, define the problem statement:
 % 
+% *We need a system that looks at pictures of bottles and decides if each one 
+% is good (PASS) or has a defect (FAIL), without a person having to check every 
+% bottle by hand.*
+% 
 % List the requirements, constraints, and success criteria for the project:
 % 
+% Requirements:
+%% 
+% * *Take an image of a bottle and output PASS or FAIL*
+% * *Show some evidence for why a bottle was flagged.*
+% * *Work reasonably well even if lighting, blur, or camera noise changes a 
+% little*
+%% 
+% Constraints:
+%% 
+% * *Only one part type used (bottle, from the MVTec AD dataset)*
+% * *Small dataset (292 images total), with far fewer FAIL examples (63) than 
+% PASS examples (229)*
+% * *Must run in MATLAB using tools/toolboxes covered in the course*
+%% 
+% Success criteria:
+%% 
+% * *High accuracy on a test set of images the model has never seen*
+% * *Low rate of missing real defects (false accepts), since that's the more 
+% serious mistake*
+% * *The system's decisions should be explainable, not just a single confidence 
+% number*
+%% 
 % What is your proposed solution?
 % 
-% List the steps you will need to take to achieve your proposed solution:
+% Build a two-part inspection system:
+%% 
+% # *Classical image processing: finds the bottle's opening in each image, measures 
+% how round and unbroken its shape is, and checks the brightness inside it, then 
+% gives a simple rule-based guess (PASS/FAIL) based on those measurements.*
+% # *AI classifier: a pretrained neural network (ResNet-18), fine-tuned on our 
+% bottle images, gives the main PASS/FAIL decision with a confidence score.*
+%% 
+% _Note: The AI's answer is the main decision. The classical method acts as 
+% a secondary sanity-check and gives extra detail for traceability._
 % 
+% List the steps you will need to take to achieve your proposed solution:
+%% 
+% # *Organize the dataset: sort images into PASS/FAIL, store them in a table 
+% and datastore*
+% # *Build the classical inspection function which preprocess images, isolate 
+% the bottle opening, measure its shape and brightness, add a simple rule-based 
+% decision*
+% # *Train the AI classifier by fine-tune ResNet-18 on our images, balance the 
+% PASS/FAIL imbalance, combine it with the classical method into one function*
+% # *Evaluate performance by running the system on a batch of test images, check 
+% accuracy, confusion matrix, yield/defect rates*
+% # *Test robustness: see how well the system holds up if lighting, blur, or 
+% noise change*
+%% 
 % What challenges do you face in the process of achieving the solution?
+%% 
+% * *Class imbalance: far fewer FAIL images than PASS, so the model could just 
+% learn to guess PASS most of the time. We addressed this with a weighted loss 
+% during training.*
+% * *Overcautious AI predictions: on the clean, Undistorted test set, the AI 
+% classifier rejected the large majority of good bottles, showing a strong bias 
+% toward FAIL. This means the model rarely misses a real defect, but at the cost 
+% of flagging many good ones.*
+% * *Small dataset: only 63 FAIL images total makes results sensitive to which 
+% images happen to land in the test set, so we're being careful not to over-trust 
+% any single split of results.*
 %% Task 1: Explore and Organize Image Dataset
 % Your goal in this step is to define defect classes and labels (keep it small).
 %% 
@@ -169,7 +227,7 @@ summary(imageTable.DefectType)
 % 
 % Your goal is to quantify the evidence for suspected defects, which supports 
 % traceability and debugging in your workflow. These metrics should answer the 
-% question: "What did the algorithm see, and how strong was the evidence?"
+% question: “What did the algorithm see, and how strong was the evidence?”
 % 
 % These measurements are mainly for traceability (inspection logs), debugging, 
 % and sanity checks. Keep it to 3–4 metrics so it stays easy.
@@ -182,7 +240,7 @@ summary(imageTable.DefectType)
 % * |areaRatio|: fraction of the ROI flagged as suspicious (|nnz(maskEvidence) 
 % / numel(maskEvidence)|)
 % * _(optional)_ |edgeDensity|: if your evidence comes from edges (chips/scratches), 
-% measure how "edgy" the ROI is (|nnz(edgeMask) / numel(edgeMask)|)
+% measure how “edgy” the ROI is (|nnz(edgeMask) / numel(edgeMask)|)
 %% 
 % *STEP 6. _Optionally_, implement a rule-based baseline.*
 % 
@@ -348,7 +406,11 @@ end
 [goodInspect, goodEvidence, goodDecision] = inspect_image(goodImg);
 [badInspect, badEvidence, badDecision] = inspect_image(badImg);
 
+figEvidence = figure;
 montage({goodInspect, badInspect});
+title("PASS and Defect Evidence Overlays");
+
+saveProjectFigure(figEvidence, "task2_evidence_overlays.png");
 
 disp(goodEvidence);
 disp(goodDecision);
@@ -492,7 +554,7 @@ fprintf('\n%d/%d FAIL images correctly identified\n', correct, numel(sampleFailI
 % * |confidenceScore| (from AI, in Task 3)
 % * |evidenceOverlay| (from Step 4 in Task 2)
 % * |evidenceMetrics| (from Step 5 in Task 2)
-% * (optional) |baselineDecision| and a "disagreement flag" if optional rules 
+% * (optional) |baselineDecision| and a “disagreement flag” if optional rules 
 % in Step 6 from Task 2 and AI output disagree
 %% 
 % Optionally, you can also choose to overlay these results on the image using 
@@ -501,6 +563,7 @@ fprintf('\n%d/%d FAIL images correctly identified\n', correct, numel(sampleFailI
 % Insert your code here (or make use of helper functions or additional .m or .mlx files and indicate where
 % they can be found). Ensure your code is well-documented.
 %% --- Test inspectPart across the full test set, check accuracy ---
+
 numTest = numel(imdsTest.Files);
 predictedLabels = strings(numTest, 1);
 trueLabels = strings(numTest, 1);
@@ -522,10 +585,11 @@ end
 
 function result = inspectPart(I, net, saveRejects, rejectFolder)
 
-if nargin < 4
+if nargin < 3
     saveRejects = false;
 end
-if nargin < 5
+
+if nargin < 4
     rejectFolder = 'rejected_parts';
 end
 
@@ -602,73 +666,7 @@ end
 % * Visualizes common failure cases (e.g. by creating a montage of common errors 
 % using |montage(...)|)
 
-%% Task 4: Evaluate Inspection System Performance
-
-actualLabels = categorical(trueLabels, ["FAIL", "PASS"]);
-modelLabels = categorical(predictedLabels, ["FAIL", "PASS"]);
-
-% confusion matrix
-figure;
-confusionchart(actualLabels, modelLabels);
-title("Inspection System Confusion Matrix");
-
-% good and defect rates
-numImages = numel(modelLabels);
-numPass = sum(modelLabels == "PASS");
-numFail = sum(modelLabels == "FAIL");
-
-goodRate = 100 * numPass / numImages;
-defectRate = 100 * numFail / numImages;
-
-summaryTable = table( ...
-    numImages, ...
-    numPass, ...
-    numFail, ...
-    goodRate, ...
-    defectRate, ...
-    'VariableNames', ...
-    {'TotalImages', 'PredictedPASS', 'PredictedFAIL', ...
-     'YieldPercent', 'DefectRatePercent'});
-
-disp(summaryTable);
-
-% plot PASS and FAIL counts
-figure;
-bar(categorical(["PASS", "FAIL"]), [numPass, numFail]);
-ylabel("Number of Images");
-title("Inspection Outcomes");
-
-% show misclassified images
-errorIdx = find(modelLabels ~= actualLabels);
-
-if isempty(errorIdx)
-    disp("No misclassified images were found.");
-else
-    numToShow = min(8, numel(errorIdx));
-    errorImages = cell(1, numToShow);
-
-    for i = 1:numToShow
-        idx = errorIdx(i);
-        I = readimage(imdsTest, idx);
-    
-        labelText = sprintf( ...
-            "True: %s | Predicted: %s", ...
-            string(actualLabels(idx)), ...
-            string(modelLabels(idx)));
-    
-        errorImages{i} = insertText( ...
-            I, ...
-            [10 10], ...
-            labelText, ...
-            "FontSize", 18, ...
-            "BoxColor", "black", ...
-            "TextColor", "white");
-    end
-
-    figure;
-    montage(errorImages);
-    title("Common Misclassified Images");
-end
+runInspectionSuite
 %% Task 5: Test and Evaluate System Robustness
 % Your goal in this step is to assess how your system performs under simulated 
 % variations. You can simulate image inspection station variation by altering 
@@ -685,8 +683,6 @@ end
 % Compare how performance changes across conditions by reporting how accuracy 
 % and false-reject rates change under simulated variations.
 
-% Insert your code here (or make use of helper functions or additional .m or .mlx files and indicate where
-% they can be found). Ensure your code is well-documented.
 % Insert your code here (or make use of helper functions or additional .m or .mlx files and indicate where
 % they can be found). Ensure your code is well-documented.
 
@@ -744,11 +740,12 @@ end
 
 disp('=== Robustness Summary Across Conditions ===')
 disp(robustnessResults)
+saveProjectTable(robustnessResults, "task5_robustness_results.csv");
 
 %% --- Visualize how accuracy and false-reject rate change across conditions ---
 conditionOrder = categorical(robustnessResults.Condition, conditions);
 
-figure
+figRobustness = figure;
 subplot(2,1,1)
 bar(conditionOrder, robustnessResults.Accuracy_pct)
 ylabel('Accuracy (%)')
@@ -761,18 +758,77 @@ ylabel('False Reject Rate (%)')
 title('False Reject Rate Across Simulated Conditions')
 grid on
 
+saveProjectFigure(figRobustness, "task5_robustness_results.png");
+
 %% --- Optional: visualize an example of each distortion for the report ---
 sampleI = readimage(imdsTest, 1);
-figure
+figDistortions = figure;
 subplot(1,4,1), imshow(sampleI), title('Baseline')
-subplot(1,4,2), imshow(imadjust(sampleI, [0.3 0.7], [])), title('Brightness')
+subplot(1,4,2), imshow(imadjust(sampleI, [], [], 0.7)), title('Brightness')
 subplot(1,4,3), imshow(imgaussfilt(sampleI, 3)), title('Blur')
 subplot(1,4,4), imshow(imnoise(sampleI, 'gaussian', 0, 0.01)), title('Noise')
 sgtitle('Example Distortions Applied for Robustness Testing')
+saveProjectFigure(figDistortions, "task5_distortion_examples.png");
+% Helper to save results
 
+function saveProjectFigure(figHandle, fileName)
+
+outputFolder = fullfile(pwd, "project_results");
+
+if ~exist(outputFolder, "dir")
+    mkdir(outputFolder);
+end
+
+exportgraphics( ...
+    figHandle, ...
+    fullfile(outputFolder, fileName), ...
+    "Resolution", 300);
+
+end
+
+function saveProjectTable(tableData, fileName)
+
+    outputFolder = fullfile(pwd, "project_results");
+
+    if ~exist(outputFolder, "dir")
+        mkdir(outputFolder);
+    end
+
+    writetable(tableData, fullfile(outputFolder, fileName));
+
+end
 %% Interpretation of Results
 % Summarize your findings by interpreting their physical/engineering meaning:
-% 
+%% 
+% * *Our system combines a rule-based classical check with an AI classifier 
+% trained on ResNet-18. The classical check looks at the bottle opening itself: 
+% how round and unbroken its shape is, and how bright or dark the middle of the 
+% opening looks. The AI classifier makes the actual PASS/FAIL call.*
+% * *Our robustness results show the system performs well and consistently across 
+% most simulated conditions. Baseline, brightness, and blur all land in the 90-95% 
+% accuracy range, with false reject rates staying low (around 0-2%), meaning the 
+% system rarely rejects a good bottle by mistake under these conditions.*
+% * *Noise is the one condition where performance clearly weakens. Accuracy 
+% drops somewhat, and the false reject rate rises to around 10%, meaning sensor 
+% noise pushes the system toward rejecting more good bottles than it should. Importantly, 
+% this is a "safe" failure direction: the system becomes overly cautious rather 
+% than letting defects slip through.*
+%% 
 % What are some limitations of your work?
-% 
+%% 
+% * *Sensor noise remains the system's weakest point, with a noticeably higher 
+% false reject rate than any other tested condition.*
+% * *Small FAIL sample size (63 total, 13 in the test set) means any single 
+% accuracy number is somewhat sensitive to which images land in the test split.*
+% * *Single part type and camera angle, results are specific to this bottle-neck 
+% dataset and may not transfer directly to other parts or camera setups.*
+%% 
 % What are practical next steps?
+%% 
+% * *Investigate why noise specifically raises the false reject rate, likely 
+% by adding noise-augmented training data so the model learns to stay confident 
+% under noisy conditions.*
+% * *Revisit the class-weighting scheme. Since the classifier is heavily biased 
+% toward FAIL even on clean images, the next step is testing different weight 
+% ratios (or resampling the training set) to find a better balance between catching 
+% real defects and not over-flagging good bottles.*
